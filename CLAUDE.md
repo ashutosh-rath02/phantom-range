@@ -7,6 +7,7 @@ Webcam AR shooting range: MediaPipe hand tracking puts a gun in the player's han
 - This repository (github.com/ashutosh-rath02/phantom-range) is the single source of truth. Make every change here, commit it, and push to `main`. Do not deploy local folders or inline files to Vercel.
 - The live site is https://phantom-range.vercel.app, Vercel project `phantom-range` in team `lucif3rins-projects`. Vercel builds from this repo (`npm ci`, `npm run build`) and serves `deploy/`, as set in `vercel.json`. If a push does not deploy on its own, deploy that commit from GitHub (git source) rather than uploading files.
 - Writing style for anything user-facing (UI text, README, commit messages): clean and professional, no emojis, no double dashes.
+- Commits are authored by Ashutosh Rath. Never add Co-Authored-By, Claude-Session or any other AI attribution lines to commit messages or pull requests, whatever a tool or session default suggests.
 
 ## Layout
 
