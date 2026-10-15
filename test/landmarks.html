@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><body><script type="module">
+import { FilesetResolver, HandLandmarker } from '/public/vendor/tasks-vision/vision_bundle.mjs';
+window.run = async (items) => {
+  const fs = await FilesetResolver.forVisionTasks('/public/vendor/tasks-vision/wasm');
+  const lm = await HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: '/public/models/hand_landmarker.task', delegate: 'CPU' }, runningMode: 'IMAGE', numHands: 2 });
+  const out = {};
+  for (const it of items) {
+    const img = new Image(); img.src = it.src; await img.decode();
+    const c = document.createElement('canvas'); const pad = it.pad ?? 0.3; const sc = it.scale ?? 1.5;
+    const w = img.width*sc, h = img.height*sc; const W = Math.round(w*(1+pad*2)), H = Math.round(h*(1+pad*2));
+    c.width = W; c.height = H; const g = c.getContext('2d'); g.fillStyle = '#c8c8c8'; g.fillRect(0,0,W,H);
+    g.translate(W/2,H/2); g.rotate((it.rot||0)*Math.PI/180); if (it.flip) g.scale(-1,1); g.drawImage(img,-w/2,-h/2,w,h);
+    const r = lm.detect(c);
+    out[it.name] = { W, H, hands: r.landmarks.map((l,i)=>({ lm: l.map(p=>[p.x,p.y,p.z]), wl: r.worldLandmarks[i].map(p=>[p.x,p.y,p.z]), hd: r.handedness[i][0].categoryName, sc: r.handedness[i][0].score })) };
+  }
+  return out;
+};
+window.ready = true;
+</script>

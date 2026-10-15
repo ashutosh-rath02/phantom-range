@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Phantom Range</title>
+<meta name="description" content="A webcam AR shooting range. Make a finger gun and a pistol, carbine, shotgun or sniper rifle appears in your hand.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400;500;600;700&family=Saira+Stencil+One&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: full-bleed mirrored camera stage; HUD pinned to the four corners; menus are centered "range cards". */
+:root {
+  --ink: #0a0e11;
+  --ink-2: #111820;
+  --panel: rgba(10, 14, 17, 0.66);
+  --line: rgba(190, 210, 224, 0.17);
+  --paper: #eef3f6;
+  --steel: #93a7b5;
+  --blaze: #ff5b1f;
+  --brass: #d9ad55;
+  --ok: #5ad893;
+  --danger: #ff4747;
+  --display: "Saira Stencil One", Impact, "Arial Narrow Bold", sans-serif;
+  --ui: "Saira Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --gap: max(14px, env(safe-area-inset-left, 0px));
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font: 500 15px/1.45 var(--ui);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--blaze); outline-offset: 2px; }
+
+/* ---------- stage ---------- */
+#stage { position: fixed; inset: 0; overflow: hidden; background: #050709; }
+#cam {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; transform: scaleX(-1);
+  filter: saturate(0.92) contrast(1.04) brightness(0.96);
+}
+#grade {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(4, 6, 8, 0.55) 100%);
+}
+#gl, #hud { position: absolute; inset: 0; pointer-events: none; }
+body:not(.playing) #cam { opacity: 0; }
+
+/* ---------- shared pieces ---------- */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+  position: relative;
+}
+.panel::before {
+  content: ""; position: absolute; left: -1px; top: -1px; width: 22px; height: 2px; background: var(--blaze);
+}
+.lbl { font: 600 11px/1 var(--ui); letter-spacing: 0.16em; text-transform: uppercase; color: var(--steel); }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 700 12px/1 var(--ui); letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 5px 8px; border: 1px solid var(--line); background: rgba(10, 14, 17, 0.5);
+}
+.flag {
+  display: inline-block; font: 700 11px/1 var(--ui); letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--ink); background: var(--blaze); padding: 5px 8px 4px;
+}
+.btn {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+  padding: 14px 16px; border: 1px solid var(--line); background: rgba(238, 243, 246, 0.04);
+  font: 700 17px/1.1 var(--ui); letter-spacing: 0.06em; text-transform: uppercase; text-align: left;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn:hover { background: rgba(238, 243, 246, 0.09); border-color: rgba(238, 243, 246, 0.35); }
+.btn small { font: 500 13px/1 var(--mono); letter-spacing: 0; text-transform: none; color: var(--steel); }
+.btn.primary { background: var(--blaze); border-color: var(--blaze); color: #170802; }
+.btn.primary:hover { background: #ff7440; }
+.btn.primary small { color: rgba(23, 8, 2, 0.7); }
+.btn.link { border-color: transparent; background: none; padding: 8px 2px; font-size: 14px; color: var(--steel); text-decoration: underline; text-underline-offset: 3px; clip-path: none; }
+.btn.link:hover { color: var(--paper); background: none; }
+.icon {
+  width: 36px; height: 36px; display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--panel);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.icon svg { width: 18px; height: 18px; stroke: var(--paper); fill: none; stroke-width: 1.8; }
+.icon:hover { border-color: rgba(238, 243, 246, 0.4); }
+.icon.off .wave { display: none; }
+.icon.off .x { display: inline; }
+.icon .x { display: none; }
+
+/* ---------- HUD ---------- */
+#ui { position: fixed; inset: 0; pointer-events: none; }
+body:not(.playing) #ui { display: none; }
+#ui button, #ui .interactive { pointer-events: auto; }
+#scorebox {
+  position: absolute; top: max(14px, env(safe-area-inset-top, 0px)); left: var(--gap);
+  padding: 12px 16px 12px; min-width: 190px; display: grid; gap: 6px;
+}
+#score { font: 400 40px/1 var(--display); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#mult.hot { background: var(--blaze); color: var(--ink); border-color: var(--blaze); }
+#streak, #acc, #best-line { font: 600 12px/1 var(--ui); letter-spacing: 0.12em; color: var(--steel); }
+#timer { display: grid; gap: 4px; margin-top: 2px; }
+#time { font: 700 26px/1 var(--mono); font-variant-numeric: tabular-nums; }
+#timer.low #time { color: var(--danger); }
+.bar { height: 3px; background: rgba(238, 243, 246, 0.12); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--brass); transform-origin: left; }
+#timer.low .bar i { background: var(--danger); }
+
+#status {
+  position: absolute; top: max(14px, env(safe-area-inset-top, 0px)); right: var(--gap);
+  display: flex; gap: 8px; align-items: center;
+}
+#track-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--steel); }
+#track-chip[data-state="ok"] i { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+#track-chip[data-state="warn"] { color: var(--danger); border-color: rgba(255, 71, 71, 0.5); }
+#track-chip[data-state="warn"] i { background: var(--danger); animation: blink 0.8s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0.2; } }
+
+#weapon {
+  position: absolute; right: var(--gap); bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  padding: 12px 16px 12px; width: 300px; display: grid; gap: 6px;
+}
+.wp-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+#wpn-name { font: 400 24px/1 var(--display); letter-spacing: 0.02em; }
+#wpn-cal { font: 500 12px/1 var(--mono); color: var(--steel); }
+.wp-ammo { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
+#ammo { font: 700 46px/1 var(--mono); }
+#ammo.empty { color: var(--danger); }
+.wp-ammo .slash, #ammo-max { font: 500 18px/1 var(--mono); color: var(--steel); }
+#pips { display: flex; flex-wrap: wrap; gap: 3px; min-height: 14px; }
+#pips i { width: 5px; height: 14px; background: var(--brass); clip-path: polygon(50% 0, 100% 28%, 100% 100%, 0 100%, 0 28%); }
+#pips[data-w="shotgun"] i { width: 11px; height: 16px; background: #c0392b; clip-path: none; box-shadow: inset 0 -5px 0 var(--brass); }
+#pips[data-w="sniper"] i { width: 7px; height: 20px; }
+#pips i.spent { background: rgba(238, 243, 246, 0.13); box-shadow: none; }
+#slots { display: flex; gap: 4px; margin-top: 4px; }
+#slots span {
+  flex: 1; text-align: center; padding: 4px 0 3px; border: 1px solid var(--line);
+  font: 700 11px/1 var(--ui); letter-spacing: 0.1em; color: var(--steel);
+}
+#slots span b { font-family: var(--mono); font-weight: 500; margin-right: 4px; color: rgba(147, 167, 181, 0.7); }
+#slots span.on { color: var(--ink); background: var(--paper); border-color: var(--paper); }
+#slots span.on b { color: var(--ink); }
+#ammo2 { font: 600 12px/1 var(--ui); letter-spacing: 0.1em; color: var(--steel); text-transform: uppercase; }
+
+#legend {
+  position: absolute; left: var(--gap); bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  padding: 10px 12px; width: 286px;
+}
+#legend header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+#legend-toggle { border: 0; background: none; color: var(--steel); font: 600 11px/1 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; padding: 4px; }
+#legend ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+#legend li {
+  display: grid; grid-template-columns: 34px 74px 1fr; align-items: center; gap: 8px;
+  padding: 3px 6px 3px 2px; border-left: 2px solid transparent; transition: background 0.12s;
+}
+#legend li canvas { width: 34px; height: 30px; }
+#legend li b { font: 700 13px/1 var(--ui); letter-spacing: 0.12em; }
+#legend li span { font: 500 13px/1.2 var(--ui); color: var(--steel); min-width: 0; }
+#legend li.on { background: rgba(255, 91, 31, 0.16); border-left-color: var(--blaze); }
+#legend li.on span { color: var(--paper); }
+#legend.collapsed ul { display: none; }
+#legend.collapsed header { margin: 0; }
+
+#officer {
+  position: absolute; top: max(14px, env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+  width: min(560px, calc(100vw - 2 * var(--gap) - 440px)); min-width: 300px;
+  padding: 14px 18px; display: grid; gap: 6px; pointer-events: auto;
+}
+#officer .step { display: flex; justify-content: space-between; align-items: center; }
+#tut-step { font: 600 12px/1 var(--ui); letter-spacing: 0.16em; text-transform: uppercase; color: var(--brass); }
+#tut-title { font: 400 26px/1.1 var(--display); text-wrap: balance; }
+#tut-sub { color: rgba(238, 243, 246, 0.82); font-size: 15px; max-width: 62ch; }
+#tut-skip { justify-self: end; border: 1px solid var(--line); background: none; padding: 5px 10px; font: 600 12px/1 var(--ui); letter-spacing: 0.12em; text-transform: uppercase; color: var(--steel); }
+#tut-skip:hover { color: var(--paper); border-color: rgba(238, 243, 246, 0.4); }
+
+#toast {
+  position: absolute; left: 50%; top: 32%; transform: translateX(-50%);
+  font: 400 30px/1 var(--display); letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 10px 18px 8px; background: rgba(10, 14, 17, 0.6); border-left: 3px solid var(--blaze);
+  white-space: nowrap;
+}
+#toast.show { animation: toast 0.25s ease-out; }
+@keyframes toast { from { opacity: 0; transform: translate(-50%, 8px); } }
+#hint {
+  position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%);
+  padding: 10px 16px; font: 600 16px/1.2 var(--ui); letter-spacing: 0.06em; text-align: center;
+  background: rgba(10, 14, 17, 0.7); border: 1px solid rgba(255, 71, 71, 0.45);
+}
+#countdown {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font: 400 min(30vw, 260px)/1 var(--display); color: var(--paper);
+  text-shadow: 0 6px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* ---------- overlays ---------- */
+.overlay { position: fixed; inset: 0; display: grid; place-items: center; overflow: auto; padding: 24px max(16px, env(safe-area-inset-right, 0px)) 24px max(16px, env(safe-area-inset-left, 0px)); }
+#intro {
+  background:
+    linear-gradient(180deg, rgba(10, 14, 17, 0.2), rgba(10, 14, 17, 0.9)),
+    repeating-linear-gradient(90deg, transparent 0 119px, rgba(190, 210, 224, 0.06) 119px 120px),
+    radial-gradient(80% 60% at 70% 20%, #1a2530, var(--ink) 70%);
+}
+.intro-card { width: min(1080px, 100%); display: grid; gap: 28px; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: 24px; align-items: end; }
+.hero-copy { display: grid; gap: 22px; min-width: 0; }
+.armory { margin: 0; position: relative; min-width: 0; }
+.armory::before {
+  content: ""; position: absolute; inset: 8% 4% 18%;
+  background: radial-gradient(closest-side, rgba(255, 91, 31, 0.16), transparent 70%);
+  pointer-events: none;
+}
+#hero-gun { display: block; width: 100%; height: 300px; position: relative; }
+#hero-cap { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 2px 0; border-top: 1px solid var(--line); }
+#hero-cap b { font: 400 22px/1.1 var(--display); letter-spacing: 0.02em; }
+#hero-cap span { grid-column: 1; font: 500 12px/1.3 var(--mono); color: var(--steel); }
+#hero-cap em { grid-column: 2; grid-row: 1 / span 2; align-self: center; font: 500 12px/1 var(--mono); font-style: normal; color: var(--steel); }
+.flagline { display: flex; align-items: center; gap: 12px; font: 600 12px/1 var(--ui); letter-spacing: 0.18em; text-transform: uppercase; color: var(--steel); flex-wrap: wrap; }
+#intro h1 {
+  margin: 0; font: 400 clamp(56px, 11vw, 132px)/0.86 var(--display); letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+#intro h1 span { color: var(--blaze); }
+.lede { margin: 0; max-width: 58ch; font-size: 19px; line-height: 1.45; color: rgba(238, 243, 246, 0.86); }
+.intro-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 28px; align-items: start; }
+.card-list { padding: 16px 18px; }
+.card-list h2, .intro-actions h2 { margin: 0 0 10px; font: 600 12px/1 var(--ui); letter-spacing: 0.18em; text-transform: uppercase; color: var(--steel); }
+.signals { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.signals li { display: grid; grid-template-columns: 52px 92px minmax(0, 1fr); gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid rgba(190, 210, 224, 0.08); }
+.signals li:first-child { border-top: 0; }
+.signals canvas { width: 52px; height: 44px; }
+.signals b { font: 700 15px/1 var(--ui); letter-spacing: 0.12em; }
+.signals span { color: rgba(238, 243, 246, 0.78); font-size: 15px; line-height: 1.3; }
+.intro-actions { display: grid; gap: 10px; }
+.notes { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 14px; color: var(--steel); }
+.notes li { padding-left: 16px; position: relative; }
+.notes li::before { content: ""; position: absolute; left: 0; top: 0.6em; width: 8px; height: 2px; background: var(--brass); }
+
+#loading { background: rgba(10, 14, 17, 0.88); }
+.load-card { width: min(420px, 100%); padding: 22px 22px 18px; display: grid; gap: 14px; }
+.load-card h2 { margin: 0; font: 400 28px/1 var(--display); }
+#load-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+#load-steps li { display: grid; gap: 5px; color: var(--steel); }
+#load-steps li .ln { display: flex; justify-content: space-between; font: 600 13px/1 var(--ui); letter-spacing: 0.12em; text-transform: uppercase; }
+#load-steps li .ln em { font-style: normal; font-family: var(--mono); font-size: 12px; letter-spacing: 0; }
+#load-steps li[data-state="busy"] { color: var(--paper); }
+#load-steps li[data-state="busy"] .ln em::after { content: "loading"; }
+#load-steps li[data-state="done"] .ln em::after { content: "ready"; color: var(--ok); }
+#load-steps li[data-state="skip"] .ln em::after { content: "skipped"; }
+#load-steps li[data-state="wait"] .ln em::after { content: "waiting"; }
+#load-steps .bar i { transform: scaleX(0); transition: transform 0.2s; }
+#load-steps li[data-state="done"] .bar i { background: var(--ok); }
+.load-card p { margin: 0; font-size: 14px; color: var(--steel); }
+
+#results { background: rgba(10, 14, 17, 0.55); }
+.res-card { width: min(520px, 100%); padding: 22px 22px 20px; display: grid; gap: 14px; }
+#res-rank { font: 400 46px/1 var(--display); color: var(--blaze); }
+.res-score { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+#res-score { font: 700 54px/1 var(--mono); font-variant-numeric: tabular-nums; }
+#res-best { font: 600 13px/1 var(--ui); letter-spacing: 0.12em; text-transform: uppercase; color: var(--brass); }
+.res-stats { margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.res-stats div { background: var(--ink-2); padding: 10px 12px; }
+.res-stats dt { font: 600 11px/1 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: var(--steel); }
+.res-stats dd { margin: 6px 0 0; font: 700 22px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.res-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.res-card .hint { margin: 0; font-size: 14px; color: var(--steel); }
+
+#error { background: rgba(10, 14, 17, 0.92); }
+.err-card { width: min(480px, 100%); padding: 22px; display: grid; gap: 12px; }
+#err-title { margin: 0; font: 400 30px/1.05 var(--display); }
+#err-body { margin: 0; color: rgba(238, 243, 246, 0.85); }
+
+/* ---------- settings drawer ---------- */
+#settings {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 100vw);
+  padding: max(18px, env(safe-area-inset-top, 0px)) max(18px, env(safe-area-inset-right, 0px)) 18px 18px;
+  background: rgba(10, 14, 17, 0.94); border-left: 1px solid var(--line);
+  overflow: auto; display: grid; gap: 16px; align-content: start; z-index: 5;
+}
+#settings header { display: flex; justify-content: space-between; align-items: center; }
+#settings h2 { margin: 0; font: 400 26px/1 var(--display); }
+#settings-close { border: 1px solid var(--line); background: none; padding: 6px 10px; font: 600 12px/1 var(--ui); letter-spacing: 0.12em; text-transform: uppercase; }
+.field { display: grid; gap: 6px; }
+.field .ln { display: flex; justify-content: space-between; font: 600 13px/1 var(--ui); letter-spacing: 0.1em; text-transform: uppercase; color: var(--steel); }
+.field output { font: 500 12px/1 var(--mono); color: var(--paper); }
+.field small { color: var(--steel); font-size: 13px; }
+input[type="range"] { width: 100%; accent-color: var(--blaze); }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); }
+.seg label { position: relative; text-align: center; padding: 8px 0; font: 700 12px/1 var(--ui); letter-spacing: 0.12em; text-transform: uppercase; color: var(--steel); cursor: pointer; }
+.seg input { position: absolute; opacity: 0; }
+.seg label:has(input:checked) { background: var(--paper); color: var(--ink); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--blaze); outline-offset: -2px; }
+.toggle { display: flex; gap: 10px; align-items: center; font-size: 15px; cursor: pointer; }
+.toggle input { width: 18px; height: 18px; accent-color: var(--blaze); }
+select { width: 100%; padding: 8px; background: var(--ink-2); color: var(--paper); border: 1px solid var(--line); font: 500 14px var(--ui); }
+.btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn-row .btn { font-size: 13px; padding: 10px 12px; justify-content: center; }
+.keys { margin: 0; font-size: 13px; color: var(--steel); line-height: 1.6; }
+.keys kbd { font: 500 11px/1 var(--mono); padding: 2px 5px; border: 1px solid var(--line); color: var(--paper); }
+
+@media (max-height: 700px) {
+  #legend { width: 196px; padding: 8px 10px; }
+  #legend li { grid-template-columns: 28px 1fr; padding: 1px 4px 1px 2px; }
+  #legend li canvas { width: 28px; height: 22px; }
+  #legend li span { display: none; }
+  #weapon { padding: 10px 14px; gap: 4px; }
+  #ammo { font-size: 38px; }
+}
+@media (max-width: 900px) {
+  .intro-grid, .hero { grid-template-columns: minmax(0, 1fr); }
+  #hero-gun { height: 220px; }
+  #legend { display: none; }
+  #officer { width: calc(100vw - 2 * var(--gap)); top: auto; bottom: 230px; min-width: 0; }
+  #weapon { width: min(300px, calc(100vw - 2 * var(--gap))); }
+}
+@media (max-width: 480px) {
+  .signals li { grid-template-columns: 44px 76px minmax(0, 1fr); gap: 8px; }
+  .res-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #scorebox { min-width: 0; }
+  #track-chip b { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #toast.show { animation: none; }
+  #track-chip[data-state="warn"] i { animation: none; }
+}
+</style>
+<!--IMPORTMAP-->
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted></video>
+  <div id="grade"></div>
+  <canvas id="gl"></canvas>
+  <canvas id="hud"></canvas>
+</div>
+
+<div id="ui">
+  <section id="scorebox" class="panel" aria-label="Score">
+    <div class="lbl" id="best-line">FREE RANGE</div>
+    <div id="score">0</div>
+    <div class="row"><span id="mult" class="chip">×1</span><span id="streak">STREAK 0</span><span id="acc">ACC —</span></div>
+    <div id="timer" hidden>
+      <div class="row" style="justify-content:space-between"><span class="lbl">Time</span><span id="time">60.0</span></div>
+      <div class="bar"><i id="timebar"></i></div>
+    </div>
+  </section>
+
+  <section id="status">
+    <span id="track-chip" class="chip" data-state="idle"><i></i><b id="track-text">STARTING</b></span>
+    <button id="btn-sound" class="icon" aria-label="Mute or unmute sound" title="Sound (M)">
+      <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/><path class="x" d="M16 9l5 6M21 9l-5 6"/></svg>
+    </button>
+    <button id="btn-full" class="icon" aria-label="Toggle fullscreen" title="Fullscreen (F)">
+      <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    </button>
+    <button id="btn-settings" class="icon" aria-label="Settings" title="Settings (Esc)">
+      <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    </button>
+  </section>
+
+  <section id="legend" class="panel interactive" aria-label="Hand signals">
+    <header><span class="lbl">Hand signals</span><button id="legend-toggle">Hide · H</button></header>
+    <ul>
+      <li data-g="aim"><canvas data-icon="aim"></canvas><b>AIM</b><span>Finger gun, thumb up</span></li>
+      <li data-g="fire"><canvas data-icon="fire"></canvas><b>FIRE</b><span>Drop your thumb</span></li>
+      <li data-g="reload"><canvas data-icon="reload"></canvas><b>RELOAD</b><span>Point at the ceiling</span></li>
+      <li data-g="switch"><canvas data-icon="switch"></canvas><b>SWITCH</b><span>Hold an open palm</span></li>
+      <li data-g="mode"><canvas data-icon="mode"></canvas><b>MODE</b><span>Hold a fist (carbine)</span></li>
+      <li data-g="scope"><canvas data-icon="aim"></canvas><b>SCOPE</b><span>Hold still (sniper)</span></li>
+    </ul>
+  </section>
+
+  <section id="weapon" class="panel" aria-label="Weapon">
+    <div class="wp-top"><span id="wpn-name">P-9 Service</span><span id="wpn-mode" class="chip">SEMI</span></div>
+    <div id="wpn-cal">9×19mm</div>
+    <div class="wp-ammo"><span id="ammo">15</span><span class="slash">/</span><span id="ammo-max">15</span></div>
+    <div id="pips"></div>
+    <div id="ammo2" hidden></div>
+    <div id="slots"><span data-w="pistol"><b>1</b>PISTOL</span><span data-w="rifle"><b>2</b>RIFLE</span><span data-w="shotgun"><b>3</b>SHOTGUN</span><span data-w="sniper"><b>4</b>SNIPER</span></div>
+  </section>
+
+  <div id="officer" class="panel" hidden>
+    <div class="step"><span id="tut-step">Step 1 of 4</span><span class="flag">Range officer</span></div>
+    <div id="tut-title">Make a finger gun</div>
+    <div id="tut-sub"></div>
+    <button id="tut-skip">Skip step · Enter</button>
+  </div>
+  <div id="toast" hidden></div>
+  <div id="hint" hidden>Raise your hand into the camera's view and make a finger gun</div>
+  <div id="countdown" hidden></div>
+</div>
+
+<div id="intro" class="overlay">
+  <div class="intro-card">
+    <div class="hero">
+      <div class="hero-copy">
+        <div class="flagline"><span class="flag">Cold range</span><span>Lane 01 · Webcam AR · Hand tracked</span></div>
+        <h1>Phantom<br><span>Range</span></h1>
+        <p class="lede">Your hand is the gun. Make a finger gun at your webcam and a pistol, carbine, pump shotgun or bolt-action rifle appears in it, with recoil, ejecting brass and stereo sound that follows your hand.</p>
+      </div>
+      <figure class="armory">
+        <canvas id="hero-gun" aria-label="The four weapons on the range, rotating"></canvas>
+        <figcaption id="hero-cap"></figcaption>
+      </figure>
+    </div>
+    <div class="intro-grid">
+      <section class="card-list panel">
+        <h2>Hand signals</h2>
+        <ul class="signals">
+          <li><canvas data-icon="aim"></canvas><b>AIM</b><span>Index finger out, thumb up, the rest curled. Move your hand to steer.</span></li>
+          <li><canvas data-icon="fire"></canvas><b>FIRE</b><span>Snap your thumb down onto your index finger. Hold it down on the carbine for full auto.</span></li>
+          <li><canvas data-icon="reload"></canvas><b>RELOAD</b><span>Point the gun straight at the ceiling for a moment.</span></li>
+          <li><canvas data-icon="switch"></canvas><b>SWITCH</b><span>Hold an open palm until the ring fills.</span></li>
+          <li><canvas data-icon="mode"></canvas><b>MODE</b><span>Hold a fist to cycle auto, burst and semi on the carbine.</span></li>
+        </ul>
+      </section>
+      <div class="intro-actions">
+        <h2>Choose a lane</h2>
+        <button id="go-free" class="btn primary">Enter free range <small>Endless</small></button>
+        <button id="go-drill" class="btn">60-second drill <small id="best-drill">No score yet</small></button>
+        <button id="go-mouse" class="btn link">No webcam? Play with the mouse</button>
+        <ul class="notes">
+          <li>Put headphones on. Shots, brass and impacts are panned to where they happen.</li>
+          <li>Stand one to two meters back so your hand and shoulders are in frame. Good front lighting helps tracking.</li>
+          <li>The camera feed is processed on this device. Nothing is uploaded.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="loading" class="overlay" hidden>
+  <div class="load-card panel">
+    <div class="flagline"><span class="flag">Setting up</span><span>Lane 01</span></div>
+    <h2>Preparing the range</h2>
+    <ul id="load-steps">
+      <li data-step="camera" data-state="wait"><div class="ln"><span>Camera</span><em></em></div><div class="bar"><i></i></div></li>
+      <li data-step="model" data-state="wait"><div class="ln"><span>Hand model · 7.8 MB</span><em></em></div><div class="bar"><i></i></div></li>
+      <li data-step="engine" data-state="wait"><div class="ln"><span>Tracking engine · 9 MB</span><em></em></div><div class="bar"><i></i></div></li>
+      <li data-step="sound" data-state="wait"><div class="ln"><span>Sound kit</span><em></em></div><div class="bar"><i></i></div></li>
+    </ul>
+    <p>Allow camera access when your browser asks. The first load downloads about 17 MB of tracking files.</p>
+  </div>
+</div>
+
+<div id="results" class="overlay" hidden>
+  <div class="res-card panel">
+    <div class="flagline"><span class="flag">Cease fire</span><span>60-second drill</span></div>
+    <div id="res-rank">Marksman</div>
+    <div class="res-score"><span id="res-score">0</span><span id="res-best"></span></div>
+    <dl class="res-stats">
+      <div><dt>Accuracy</dt><dd id="res-acc">0%</dd></div>
+      <div><dt>Hits / shots</dt><dd id="res-hits">0 / 0</dd></div>
+      <div><dt>Best streak</dt><dd id="res-streak">0</dd></div>
+      <div><dt>Clays</dt><dd id="res-clays">0</dd></div>
+      <div><dt>Drones</dt><dd id="res-drones">0</dd></div>
+      <div><dt>Bottles</dt><dd id="res-bottles">0</dd></div>
+    </dl>
+    <div class="res-actions"><button id="again" class="btn primary">Run it again</button><button id="to-free" class="btn">Free range</button></div>
+    <p class="hint">Or hold an open palm to run it again.</p>
+  </div>
+</div>
+
+<div id="error" class="overlay" hidden>
+  <div class="err-card panel">
+    <div class="flagline"><span class="flag">Range closed</span></div>
+    <h2 id="err-title">Could not start</h2>
+    <p id="err-body"></p>
+    <div class="btn-row"><button id="err-retry" class="btn primary">Try again</button><button id="err-mouse" class="btn">Play with mouse</button></div>
+  </div>
+</div>
+
+<aside id="settings" hidden aria-label="Settings">
+  <header><h2>Settings</h2><button id="settings-close">Close · Esc</button></header>
+  <div class="field"><div class="ln"><label for="s-gain">Aim sensitivity</label><output id="o-gain"></output></div><input type="range" id="s-gain" min="0.5" max="2" step="0.05"><small>At 1×, moving your hand about 30 cm takes the crosshair from the center to the edge.</small></div>
+  <div class="field"><div class="ln"><label for="s-point">Finger direction</label><output id="o-point"></output></div><input type="range" id="s-point" min="0" max="0.6" step="0.02"><small>How much tilting your finger swings the aim.</small></div>
+  <div class="field"><div class="ln"><span>Trigger</span></div>
+    <div class="seg" role="radiogroup" aria-label="Trigger sensitivity">
+      <label><input type="radio" name="s-trig" value="light">Light</label>
+      <label><input type="radio" name="s-trig" value="normal">Normal</label>
+      <label><input type="radio" name="s-trig" value="firm">Firm</label>
+    </div>
+    <small>Light fires on a smaller thumb drop. Firm needs the thumb all the way down.</small>
+  </div>
+  <label class="toggle"><input type="checkbox" id="s-laser">Laser sight</label>
+  <label class="toggle"><input type="checkbox" id="s-two">A gun in each hand</label>
+  <label class="toggle"><input type="checkbox" id="s-auto">Reload automatically when empty</label>
+  <label class="toggle"><input type="checkbox" id="s-occ">Fingers wrap around the grip</label>
+  <label class="toggle"><input type="checkbox" id="s-skel">Show tracking skeleton (D)</label>
+  <div class="field"><div class="ln"><label for="s-vol">Volume</label><output id="o-vol"></output></div><input type="range" id="s-vol" min="0" max="1" step="0.05"></div>
+  <div class="field"><div class="ln"><label for="s-cam">Camera</label></div><select id="s-cam"></select></div>
+  <div class="btn-row"><button id="s-calib" class="btn">Re-center aim</button><button id="s-tut" class="btn">Replay tutorial</button></div>
+  <div class="btn-row"><button id="s-menu" class="btn">Main menu</button></div>
+  <p class="keys">Keyboard: <kbd>Space</kbd> fire · <kbd>R</kbd> reload · <kbd>Q</kbd> or <kbd>1</kbd>–<kbd>4</kbd> weapons · <kbd>B</kbd> fire mode · <kbd>E</kbd> scope · <kbd>C</kbd> re-center · <kbd>H</kbd> legend · <kbd>M</kbd> mute · <kbd>F</kbd> fullscreen. Mouse aims and clicks fire; right-click scopes the sniper.</p>
+</aside>
+
+<!--APP-->
+</body>
+</html>

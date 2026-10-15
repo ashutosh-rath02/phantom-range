@@ -1,0 +1,19 @@
+{
+  "name": "phantom-range",
+  "version": "1.0.0",
+  "description": "Webcam AR shooting range: hand tracking puts a pistol, carbine, shotgun or sniper rifle in your hand, and gestures run it.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:dev": "node build.mjs --dev",
+    "test": "cd test && node gesture_unit.mjs && node trigger_unit.mjs",
+    "serve": "node test/server.mjs . 8080"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.21",
+    "esbuild": "^0.24.0",
+    "three": "^0.160.0"
+  },
+  "license": "UNLICENSED"
+}

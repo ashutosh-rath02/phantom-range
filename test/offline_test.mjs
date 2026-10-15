@@ -1,0 +1,15 @@
+import { chromium } from 'playwright';
+import fs from 'node:fs';
+const scenario = JSON.parse(fs.readFileSync('scenario_small.json', 'utf8'));
+const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'] });
+const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+const ext = [];
+ctx.on('request', (r) => { const u = r.url(); if (!u.startsWith('http://localhost')) ext.push(u.slice(0, 80)); });
+const page = await ctx.newPage();
+await page.addInitScript(`window.__FAKE_SCRIPT = ${JSON.stringify(scenario)}; window.__FAKE_BASE = 'http://localhost:8080';`);
+await page.addInitScript({ path: 'fakecam.js' });
+await page.goto('http://localhost:8099/?autostart=free&skiptut=1&cpu=1&mute');
+await page.waitForFunction(() => window.__PR?.slots?.[0]?.ctrl && window.__PR.slots[0].ctrl !== 'mouse', null, { timeout: 180000 }).catch(() => console.log('no gun'));
+console.log('offline ok', await page.evaluate(() => ({ phase: window.__PR.S.phase, mode: window.__PR.tracker.mode, delegate: window.__PR.tracker.delegate, hands: window.__PR.hands.tracks.length })));
+console.log('external requests:', ext);
+await browser.close();

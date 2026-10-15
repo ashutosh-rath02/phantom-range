@@ -1,0 +1,25 @@
+<!doctype html><meta charset="utf-8"><body><script type="module">
+import { AudioEngine } from '/src/audio.js';
+window.run = async () => {
+  const a = new AudioEngine();
+  const t0 = performance.now();
+  await a.load();
+  const ms = performance.now() - t0;
+  const stats = {};
+  for (const [name, list] of Object.entries(a.buffers)) {
+    const b = list[0]; const d = b.getChannelData(0); const d2 = b.getChannelData(1);
+    let peak = 0, sum = 0, nz = 0, last = 0;
+    for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); peak = Math.max(peak, v, Math.abs(d2[i])); sum += d[i] * d[i]; if (v > 0.001) last = i; if (Number.isNaN(d[i])) nz++; }
+    // zero-crossing rate as a rough brightness measure over the first 50 ms
+    let zc = 0; const n50 = Math.min(d.length, Math.floor(b.sampleRate * 0.05));
+    for (let i = 1; i < n50; i++) if ((d[i - 1] < 0) !== (d[i] < 0)) zc++;
+    stats[name] = { n: list.length, dur: +(b.duration.toFixed(2)), peak: +peak.toFixed(3), rms: +Math.sqrt(sum / d.length).toFixed(4), tail: +(last / b.sampleRate).toFixed(2), nan: nz, zcr50: zc };
+  }
+  // export a shot sequence as wav (pistol, rifle x3, shotgun, sniper) for inspection
+  const sr = 48000; const seq = [['pistol', 0], ['rifle', 0.9], ['rifle', 0.983], ['rifle', 1.066], ['shotgun', 1.8], ['sniper', 3.4], ['ding0', 5.8], ['glass', 6.6], ['casing', 7.4]];
+  const len = sr * 8.2; const L = new Float32Array(len), R = new Float32Array(len);
+  for (const [n, t] of seq) { const b = a.buffers[n][0]; const o = Math.floor(t * sr); const l = b.getChannelData(0), r = b.getChannelData(1); for (let i = 0; i < b.length && o + i < len; i++) { L[o + i] += l[i] * 0.7; R[o + i] += r[i] * 0.7; } }
+  return { ms, stats, wav: Array.from(L.filter((_, i) => i % 2 === 0)).map((v) => Math.round(v * 32767)) };
+};
+window.ready = true;
+</script>

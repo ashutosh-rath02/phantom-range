@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#556}</style>
+<script type="importmap">{"imports":{"three":"/public/vendor/three.module.min.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { makeMaterials, buildGun, makeEnvironment, makeTargetMaterials, buildPlate, buildBottle, buildClay, buildDrone, buildShelf } from '/src/models.js';
+const W=1600,H=900; const r = new THREE.WebGLRenderer({antialias:true}); r.setSize(W,H); document.body.appendChild(r.domElement);
+r.toneMapping = THREE.ACESFilmicToneMapping; r.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x8a9099);
+scene.environment = makeEnvironment(r);
+scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x302820, 0.5)); const d = new THREE.DirectionalLight(0xfff4e6, 2.2); d.position.set(0.6,2,1.8); scene.add(d); const d2 = new THREE.DirectionalLight(0x9fc0ff, 0.8); d2.position.set(-2,0.5,-1); scene.add(d2);
+const M = makeMaterials();
+const ids = ['pistol','rifle','shotgun','sniper'];
+window.render = (view) => {
+  while (scene.children.length > 4) scene.remove(scene.children[4]);
+  const cam = new THREE.PerspectiveCamera(30, W/H, 0.01, 50);
+  if (view==='targets') {
+    const T = makeTargetMaterials();
+    const p = buildPlate(0.2, T); p.group.position.set(-0.9,0.5,0); scene.add(p.group);
+    for (let i=0;i<3;i++){ const b = buildBottle(T,i); b.group.position.set(0.2+i*0.15,-0.2,0); scene.add(b.group); }
+    const sh = buildShelf(T); sh.position.set(0.35,-0.22,0); scene.add(sh);
+    const c = buildClay(T); c.position.set(-0.3,-0.3,0.2); c.rotation.x=0.5; scene.add(c);
+    const dr = buildDrone(T); dr.group.position.set(0.5,0.45,0); dr.group.rotation.x=0.4; scene.add(dr.group);
+    cam.position.set(0,0.1,3.4); cam.lookAt(0,0,0);
+  } else {
+    ids.forEach((id,i) => { const g = buildGun(id, M); g.root.position.set(0, 0.45 - i*0.3, 0); if (view==='quarter') g.root.rotation.y = -0.7; else g.root.rotation.y = -Math.PI/2; scene.add(g.root); });
+    cam.position.set(0, 0.0, 2.6); cam.lookAt(0,0,0);
+  }
+  r.render(scene, cam); return true;
+};
+window.ready = true;
+</script>
