@@ -16,4 +16,4 @@ Webcam AR shooting range: MediaPipe hand tracking puts a gun in the player's han
 ## Checks before pushing
 
 - `npm test` runs the fast unit tests (pose classification, thumb trigger simulation).
-- Browser tests: `npm run serve` in the background, then `bash test/regress.sh` (headless Chromium with a fake webcam built from real hand photos). This machine-independent suite is slow on small cloud machines; the scenario runner starts its clock once tracking is up.
+- Browser tests: `npm run serve` in the background, then `bash test/regress.sh` (headless Chromium with a fake webcam built from real hand photos). It is slow on small cloud machines; the scenario runner starts its clock only once tracking is running.
