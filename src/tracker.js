@@ -1,6 +1,7 @@
 // Webcam capture + MediaPipe hand landmarker, plus the mapping from camera pixels to screen space.
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { ASSETS, TRACKING } from './config.js';
+import { storage } from './util.js';
 
 async function urlExists(url) {
   try {
@@ -135,6 +136,10 @@ export class Tracker {
     this.sentAt = 0;
     this.frameReady = false;
     this.workerErrors = 0;
+    this.initArgs = null;
+    // delegate trial (see tune()): GPU inference can slow to a crawl while the game renders on the same GPU
+    this.trial = { state: 'idle', liveT: 0, spare: null, t0: 0, n0: 0, gpuFps: 0, cpuFps: 0, gpuMs: 0 };
+    this.resultCount = 0;
   }
 
   get ready() {
@@ -205,6 +210,9 @@ export class Tracker {
     const local = !isFile && (await urlExists(ASSETS.wasmLocal + '/vision_wasm_internal.js'));
     const base = local ? ASSETS.wasmLocal : ASSETS.wasmCdn;
     const workerLib = local && (await urlExists(ASSETS.workerLibLocal)) ? ASSETS.workerLibLocal : ASSETS.workerLibCdn;
+    // also used by the outfit segmenter, which loads its own model only when an outfit is worn
+    const segModel = local && (await urlExists(ASSETS.segModelLocal)) ? ASSETS.segModelLocal : ASSETS.segModelCdn;
+    this.assets = { lib: abs(workerLib), wasmBase: abs(base), segModel: abs(segModel) };
     const fileset = await FilesetResolver.forVisionTasks(base);
     // Warm the HTTP cache for the 9 MB engine binary so its download shows progress;
     // MediaPipe's own request then comes from cache.
@@ -226,21 +234,26 @@ export class Tracker {
       minHandPresenceConfidence: TRACKING.minPresence,
       minTrackingConfidence: TRACKING.minTrack,
     });
-    const forceCpu = /[?&]cpu\b/.test(location.search);
+    // A device where the CPU delegate tracked faster than the GPU one (see tune()) starts on the CPU.
+    const pref = storage.get('pr.trackPref', null);
+    const prefCpu = pref?.delegate === 'CPU' && Date.now() - (pref.at || 0) < 14 * 864e5;
+    const forceCpu = /[?&]cpu\b/.test(location.search) || (prefCpu && !/[?&]gpu\b/.test(location.search));
+    if (prefCpu) this.trial.state = 'done';
     const canWorker = typeof Worker !== 'undefined' && typeof createImageBitmap === 'function' && !/[?&]noworker\b/.test(location.search);
     if (canWorker) {
       try {
-        await this.startWorker({
+        this.initArgs = {
           lib: abs(workerLib),
           wasmBase: abs(base),
           model,
-          forceCpu,
           numHands: TRACKING.numHands,
           minDetect: TRACKING.minDetect,
           minPresence: TRACKING.minPresence,
           minTrack: TRACKING.minTrack,
           useCanvas: this.useCanvas,
-        });
+        };
+        const w = await this.spawnWorker({ ...this.initArgs, forceCpu });
+        this.attach(w);
         this.mode = 'worker';
       } catch (e) {
         console.warn('Tracking worker unavailable, tracking on the main thread instead', e);
@@ -266,7 +279,8 @@ export class Tracker {
     onProgress?.('ready', 1);
   }
 
-  startWorker(init) {
+  // Starts a tracking worker and resolves with { worker, delegate, initMs } once its model is ready.
+  spawnWorker(init) {
     const t0 = performance.now();
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(new Blob([`(${workerMain.toString()})();`], { type: 'text/javascript' }));
@@ -278,23 +292,19 @@ export class Tracker {
         reject(e);
         return;
       }
-      this.worker = w;
-      const done = (err) => {
+      const done = (err, info) => {
         clearTimeout(timer);
         URL.revokeObjectURL(url);
-        if (err) reject(err);
-        else resolve();
+        if (err) {
+          w.terminate();
+          reject(err);
+        } else resolve(info);
       };
       const timer = setTimeout(() => done(new Error('tracking worker did not start in time')), 45000);
       w.onmessage = (e) => {
         const m = e.data;
-        if (m.type === 'ready') {
-          this.delegate = m.delegate;
-          this.initMs = { ...m.ms, total: performance.now() - t0 };
-          w.onmessage = (ev) => this.onWorkerMessage(ev.data);
-          w.onerror = (ev) => console.warn('tracking worker error', ev.message);
-          done();
-        } else if (m.type === 'error') done(new Error(m.message));
+        if (m.type === 'ready') done(null, { worker: w, delegate: m.delegate, initMs: { ...m.ms, total: performance.now() - t0 } });
+        else if (m.type === 'error') done(new Error(m.message));
       };
       w.onerror = (e) => {
         e.preventDefault?.();
@@ -304,19 +314,110 @@ export class Tracker {
     });
   }
 
+  // Makes a started worker the one that receives camera frames.
+  attach(info) {
+    const w = info.worker;
+    this.worker = w;
+    this.delegate = info.delegate;
+    this.initMs ||= info.initMs;
+    this.inFlight = false;
+    this.inferMs = 0;
+    w.onmessage = (ev) => this.onWorkerMessage(ev.data, w);
+    w.onerror = (ev) => console.warn('tracking worker error', ev.message);
+  }
+
+  // Called every frame with whether the game is running. GPU inference shares the GPU with rendering
+  // and on some laptops slows to a few frames per second while the game draws (it was three times
+  // faster in a background tab on the machine where this showed up). If tracking is slow, the CPU
+  // delegate gets a trial in a second worker; whichever tracks faster under real load stays, and the
+  // choice is remembered for this browser.
+  tune(dt, live) {
+    const tr = this.trial,
+      P = TRACKING.trial;
+    if (this.mode !== 'worker' || tr.state === 'done' || tr.state === 'starting') return;
+    if (!live || dt > 0.5) {
+      // measurements only count while the game renders without interruption
+      tr.liveT = 0;
+      return;
+    }
+    if (tr.state === 'idle') {
+      if (this.delegate !== 'GPU') {
+        tr.state = 'done';
+        return;
+      }
+      tr.liveT += dt;
+      if (tr.liveT < P.warm) {
+        tr.t0 = performance.now();
+        tr.n0 = this.resultCount;
+        return;
+      }
+      if (tr.liveT < P.warm + P.measure) return;
+      tr.gpuFps = ((this.resultCount - tr.n0) * 1000) / (performance.now() - tr.t0);
+      tr.gpuMs = this.inferMs;
+      if (tr.gpuFps >= P.minFps) {
+        tr.state = 'done';
+        return;
+      }
+      tr.state = 'starting';
+      this.spawnWorker({ ...this.initArgs, forceCpu: true }).then(
+        (info) => {
+          if (!this.worker) return info.worker.terminate();
+          if (info.delegate !== 'CPU') {
+            info.worker.terminate();
+            tr.state = 'done';
+            return;
+          }
+          tr.spare = { worker: this.worker, delegate: this.delegate, initMs: this.initMs };
+          this.attach(info);
+          tr.state = 'cpu';
+          tr.liveT = 0;
+        },
+        (e) => {
+          console.warn('CPU tracking trial failed to start', e);
+          tr.state = 'done';
+        },
+      );
+      return;
+    }
+    if (tr.state === 'cpu') {
+      tr.liveT += dt;
+      if (tr.liveT < P.warm / 2) {
+        tr.t0 = performance.now();
+        tr.n0 = this.resultCount;
+        return;
+      }
+      if (tr.liveT < P.warm / 2 + P.measure) return;
+      tr.cpuFps = ((this.resultCount - tr.n0) * 1000) / (performance.now() - tr.t0);
+      const keepCpu = tr.cpuFps > tr.gpuFps * P.gain;
+      if (keepCpu) tr.spare.worker.terminate();
+      else {
+        this.worker.terminate();
+        this.attach(tr.spare);
+      }
+      tr.spare = null;
+      tr.state = 'done';
+      storage.set('pr.trackPref', { delegate: keepCpu ? 'CPU' : 'GPU', gpuFps: +tr.gpuFps.toFixed(1), cpuFps: +tr.cpuFps.toFixed(1), at: Date.now() });
+      console.info(`tracking: GPU ${tr.gpuFps.toFixed(1)} fps, CPU ${tr.cpuFps.toFixed(1)} fps, using ${this.delegate}`);
+    }
+  }
+
   stopWorker() {
     this.worker?.terminate();
     this.worker = null;
+    this.trial.spare?.worker.terminate();
+    this.trial.spare = null;
     this.inFlight = false;
   }
 
-  onWorkerMessage(m) {
-    if (m.type !== 'result') return;
+  onWorkerMessage(m, w) {
+    // a worker that was just swapped out may still answer its last frame
+    if (m.type !== 'result' || w !== this.worker) return;
     // only the reply to the newest frame frees the pipeline (an older one arrives after a watchdog resend)
     if (m.id === this.frameId) this.inFlight = false;
-    this.inferMs = this.inferMs * 0.9 + m.ms * 0.1;
+    this.inferMs = this.inferMs ? this.inferMs * 0.9 + m.ms * 0.1 : m.ms;
     if (m.res) {
       this.workerErrors = 0;
+      this.resultCount++;
       this.results.push({ res: m.res, t: m.ts / 1000 });
       this.countFrame(m.ts);
     } else if (m.error && ++this.workerErrors === 30) console.warn('tracking keeps failing in the worker:', m.error);
@@ -344,7 +445,13 @@ export class Tracker {
     this.inFlight = true;
     this.sentAt = now;
     const id = (this.frameId = (this.frameId || 0) + 1);
-    createImageBitmap(v).then(
+    // The CPU delegate copies every frame into the graph; 960 px wide is plenty for the landmark
+    // model (it works on a 224 px crop of the hand) and saves a good share of that work.
+    const small = this.delegate === 'CPU' && v.videoWidth > 960;
+    const bmP = small
+      ? createImageBitmap(v, { resizeWidth: 960, resizeHeight: Math.round((960 * v.videoHeight) / v.videoWidth), resizeQuality: 'medium' })
+      : createImageBitmap(v);
+    bmP.then(
       (bm) => {
         if (!this.worker) return bm.close();
         this.worker.postMessage({ type: 'frame', bitmap: bm, ts, id }, [bm]);

@@ -101,6 +101,7 @@ body:not(.playing) #cam { opacity: 0; }
 .icon.off .wave { display: none; }
 .icon.off .x { display: inline; }
 .icon .x { display: none; }
+.icon.on { border-color: var(--blaze); background: rgba(255, 91, 31, 0.16); }
 
 /* ---------- HUD ---------- */
 #ui { position: fixed; inset: 0; pointer-events: none; }
@@ -364,6 +365,9 @@ select { width: 100%; padding: 8px; background: var(--ink-2); color: var(--paper
     <button id="btn-sound" class="icon" aria-label="Mute or unmute sound" title="Sound (M)">
       <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/><path class="x" d="M16 9l5 6M21 9l-5 6"/></svg>
     </button>
+    <button id="btn-outfit" class="icon" aria-label="Change outfit" title="Outfit (O)">
+      <svg viewBox="0 0 24 24"><path d="M9 4l-5 3 2 4 2-1v10h8V10l2 1 2-4-5-3a3 3 0 0 1-6 0z"/></svg>
+    </button>
     <button id="btn-full" class="icon" aria-label="Toggle fullscreen" title="Fullscreen (F)">
       <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
     </button>
@@ -381,6 +385,7 @@ select { width: 100%; padding: 8px; background: var(--ink-2); color: var(--paper
       <li data-g="switch"><canvas data-icon="switch"></canvas><b>SWITCH</b><span>Hold an open palm</span></li>
       <li data-g="mode"><canvas data-icon="mode"></canvas><b>MODE</b><span>Hold a fist (carbine)</span></li>
       <li data-g="scope"><canvas data-icon="aim"></canvas><b>SCOPE</b><span>Hold still (sniper)</span></li>
+      <li data-g="outfit"><canvas data-icon="outfit"></canvas><b>OUTFIT</b><span>Hold a rock sign</span></li>
     </ul>
   </section>
 
@@ -426,6 +431,7 @@ select { width: 100%; padding: 8px; background: var(--ink-2); color: var(--paper
           <li><canvas data-icon="reload"></canvas><b>RELOAD</b><span>Point the gun straight at the ceiling for a moment.</span></li>
           <li><canvas data-icon="switch"></canvas><b>SWITCH</b><span>Hold an open palm until the ring fills.</span></li>
           <li><canvas data-icon="mode"></canvas><b>MODE</b><span>Hold a fist to cycle auto, burst and semi on the carbine.</span></li>
+          <li><canvas data-icon="outfit"></canvas><b>OUTFIT</b><span>Hold a rock sign (index and little finger up) to change into camo or a uniform.</span></li>
         </ul>
       </section>
       <div class="intro-actions">
@@ -501,11 +507,12 @@ select { width: 100%; padding: 8px; background: var(--ink-2); color: var(--paper
   <label class="toggle"><input type="checkbox" id="s-auto">Reload automatically when empty</label>
   <label class="toggle"><input type="checkbox" id="s-occ">Fingers wrap around the grip</label>
   <label class="toggle"><input type="checkbox" id="s-skel">Show tracking skeleton (D)</label>
+  <div class="field"><div class="ln"><label for="s-outfit">Outfit</label></div><select id="s-outfit"></select><small>Redraws your clothes on screen. The first change downloads a 16 MB clothing model; the camera image stays on your machine.</small></div>
   <div class="field"><div class="ln"><label for="s-vol">Volume</label><output id="o-vol"></output></div><input type="range" id="s-vol" min="0" max="1" step="0.05"></div>
   <div class="field"><div class="ln"><label for="s-cam">Camera</label></div><select id="s-cam"></select></div>
   <div class="btn-row"><button id="s-calib" class="btn">Re-center aim</button><button id="s-tut" class="btn">Replay tutorial</button></div>
   <div class="btn-row"><button id="s-menu" class="btn">Main menu</button></div>
-  <p class="keys">Keyboard: <kbd>Space</kbd> fire · <kbd>R</kbd> reload · <kbd>Q</kbd> or <kbd>1</kbd>–<kbd>4</kbd> weapons · <kbd>B</kbd> fire mode · <kbd>E</kbd> scope · <kbd>C</kbd> re-center · <kbd>H</kbd> legend · <kbd>M</kbd> mute · <kbd>F</kbd> fullscreen. Mouse aims and clicks fire; right-click scopes the sniper.</p>
+  <p class="keys">Keyboard: <kbd>Space</kbd> fire · <kbd>R</kbd> reload · <kbd>Q</kbd> or <kbd>1</kbd>–<kbd>4</kbd> weapons · <kbd>B</kbd> fire mode · <kbd>E</kbd> scope · <kbd>O</kbd> outfit · <kbd>C</kbd> re-center · <kbd>H</kbd> legend · <kbd>M</kbd> mute · <kbd>F</kbd> fullscreen. Mouse aims and clicks fire; right-click scopes the sniper.</p>
 </aside>
 
 <!--APP-->

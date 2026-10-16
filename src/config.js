@@ -10,6 +10,10 @@ export const ASSETS = {
   modelLocal: './models/hand_landmarker.task',
   modelCdn:
     'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+  // outfits: multiclass selfie segmenter (clothes class), loaded the first time an outfit is worn
+  segModelLocal: './models/selfie_multiclass_256x256.tflite',
+  segModelCdn:
+    'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite',
 };
 
 export const TRACKING = {
@@ -19,6 +23,9 @@ export const TRACKING = {
   minTrack: 0.5,
   webcamHFov: 64, // degrees; typical laptop webcam. Only affects perspective strength.
   lostGrace: 0.28, // seconds a hand can vanish before its gun is holstered
+  // GPU against CPU trial when tracking is slow under game load (Tracker.tune): seconds to settle,
+  // seconds to measure, the rate below which the trial runs and the margin the CPU must win by
+  trial: { warm: 2, measure: 3, minFps: 22, gain: 1.15 },
 };
 
 // Gesture thresholds measured from real hand photos (see test/analyze2.py).
@@ -29,6 +36,13 @@ export const GESTURE = {
   gunMargin: 0.1, // index must beat ring/pinky average by this much
   palmMin: 0.84,
   fistMax: 0.7,
+  // 2D rescue for a relaxed index finger: its image reach (wrist to tip, palm lengths) and how far it
+  // must reach past the other fingertips
+  reachMin: 1.2,
+  reachMargin: 0.2,
+  rockPinky: 0.85, // rock sign: little finger extension above this, middle and ring below rockCurl
+  rockCurl: 0.75,
+  rockHold: 0.6,
   // Thumb trigger. Heights are thumb tip above the index finger, in palm lengths. Both levels start
   // here and then adapt to each player; the trigger setting picks where between them the shot breaks.
   thumbCockedInit: 0.62,

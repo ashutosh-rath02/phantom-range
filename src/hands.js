@@ -81,22 +81,174 @@ export function thumbSignal(m, P) {
   return { u: (1 - w2) * m.h + w2 * t2.h, h2: t2.h };
 }
 
+// Thumb hammer trigger, driven by the thumb height signal (palm lengths above the index finger).
+// It fires on a quick drop measured from where the thumb just was and re-cocks as soon as the thumb
+// comes back up part of the way. Both tests are relative to the thumb's own recent motion, so the
+// trigger keeps working when a player's resting thumb height drifts during play; a fixed "cocked"
+// level would leave the trigger stuck down once the thumb stopped rising that high. The two learned
+// levels (fired and cocked) only scale the tests, they never gate them.
+export class ThumbTrigger {
+  constructor() {
+    this.down = GESTURE.thumbDownInit; // how low this thumb goes when it fires
+    this.top = GESTURE.thumbCockedInit; // where it has recently been held when cocked
+    this.armed = false;
+    this.fired = false;
+    this.hist = [];
+    this.trough = 0;
+    this.peakAtFire = 0;
+    this.pend = null;
+    this.line = 0;
+    this.pull = 0;
+    this.lastT = 0;
+    this.fireT = 0; // where the shot is aimed from (start of the drop)
+    this.fireS = 0; // thumb height and time of the last shot
+    this.fireAt = 0;
+  }
+
+  // A fresh hold of the gun: armed straight away if the thumb is already up.
+  begin(s, t) {
+    this.fired = false;
+    this.pend = null;
+    this.hist = [{ t, s }];
+    this.top = Math.max(this.down + 0.2, Math.min(this.top, s + 0.1));
+    this.armed = s > this.down + 0.2;
+    this.trough = s;
+    this.lastT = t;
+  }
+
+  // The hand stopped reading as a finger gun: drop any shot and wait for the thumb to come up again.
+  cancel(s, t) {
+    const was = this.fired;
+    this.fired = false;
+    this.armed = false;
+    this.pend = null;
+    this.trough = s;
+    this.hist = [{ t, s }];
+    return was;
+  }
+
+  // Trigger tests are suspended for a moment (pointing at the ceiling, hand changing shape) without a
+  // shot in progress: forget the recent motion so the gap cannot read as a drop when they resume.
+  pause() {
+    this.hist = [];
+    this.pend = null;
+  }
+
+  // Feeds one detection. gap is the detection interval in seconds.
+  // Returns 'fire', 'release', 'refire' (a second, deeper snap before the first was let go) or null.
+  update(s, t, gap) {
+    const dt = this.lastT ? clamp(t - this.lastT, 0.001, 0.5) : 1 / 30;
+    this.lastT = t;
+    const win = Math.max(0.35, 2.5 * gap);
+    this.hist.push({ t, s });
+    while (this.hist.length > 1 && t - this.hist[0].t > win) this.hist.shift();
+    let peak = -Infinity;
+    for (const h of this.hist) peak = Math.max(peak, h.s);
+    const span = Math.max(0.2, peak - this.down);
+    const need = Math.max(0.15, (GESTURE.snapFactor ?? 0.45) * span);
+    const drop = peak - s;
+    const snap = drop >= need;
+    // One frame of drop is enough when it is deep, which matters at low camera rates where a snap
+    // often shows on a single frame. A shallower drop must still be there on the next frame, so a
+    // single bad landmark cannot fire the gun.
+    const deep = drop >= Math.max(0.25, 0.6 * span) || (snap && s < this.down + 0.12);
+    let ev = null;
+
+    if (!this.fired) {
+      // cocked level: follows a raised thumb quickly and a lowered one slowly
+      this.top += (s - this.top) * (1 - Math.exp(-dt / (s > this.top ? 0.15 : 1.5)));
+      this.top = Math.max(this.top, this.down + 0.2);
+      this.trough = Math.min(this.trough, s);
+      if (!this.armed && s - this.trough >= Math.max(0.12, 0.35 * (this.top - this.trough))) this.armed = true;
+      this.line = this.down + (GESTURE.cockFactor ?? 0.5) * (this.top - this.down);
+      // a slower press still counts once the thumb is well below where it was being held
+      const press = s < this.line && this.top - s >= need;
+      const want = this.armed && (snap || press);
+      // the next frame confirms a shallower drop if the thumb is still clearly below where it started
+      const held = this.pend && s <= this.pend.peak - 0.4 * this.pend.need;
+      if ((want && deep) || (this.armed && held)) ev = this.shoot(s, t, peak, span, 'fire');
+      else this.pend = want ? { peak, need } : null;
+    } else {
+      // A lazy snap can fire on a shallow dip and the real snap follow straight after, from a thumb
+      // that never rose far enough to re-cock. A second drop that goes well below the first is a shot.
+      if (snap && deep && s < this.trough - 0.1 && this.fireS > this.down + 0.12 && t - this.fireAt >= 0.18) {
+        this.learn();
+        ev = this.shoot(s, t, peak, span, 'refire');
+      } else {
+        this.trough = Math.min(this.trough, s);
+        // Re-cock once the thumb has come back up by part of the snap, or as soon as it is clearly
+        // above the fired level again (a shallow snap barely dips, so its way back up is short).
+        const clear = this.down + Math.max(0.15, 0.4 * (this.top - this.down));
+        if (s - this.trough >= Math.max(0.12, 0.35 * (this.peakAtFire - this.trough)) || (s > clear && s - this.trough > 0.02)) {
+          this.learn();
+          this.fired = false;
+          this.armed = true;
+          this.trough = s;
+          this.hist = [{ t, s }];
+          ev = 'release';
+        }
+      }
+    }
+    this.pull = this.fired ? 1 : clamp((this.top - s) / Math.max(0.05, this.top - this.line), 0, 1);
+    return ev;
+  }
+
+  shoot(s, t, peak, span, ev) {
+    this.fired = true;
+    this.fireS = s;
+    this.fireAt = t;
+    this.armed = false;
+    this.trough = s;
+    this.peakAtFire = Math.max(peak, s);
+    // the shot is aimed from just before the thumb started to drop
+    let dropT = t;
+    for (const h of this.hist) if (h.s >= peak - span * 0.15) dropT = h.t;
+    this.fireT = dropT;
+    this.hist = [{ t, s }];
+    this.pend = null;
+    return ev;
+  }
+
+  // Fired level: moves quickly toward deeper shots and slowly toward shallow ones.
+  learn() {
+    const k = this.trough < this.down ? 0.35 : 0.1;
+    this.down = clamp(this.down + (this.trough - this.down) * k, -0.4, this.top - 0.2);
+  }
+}
+
+// How far each fingertip reaches from the wrist in the camera image, in palm lengths. The 3D estimate
+// sometimes reads a relaxed but clearly pointing index finger as bent; in the image its tip still
+// reaches well past the curled fingers.
+export function reach2D(P) {
+  const d = (a, b) => Math.hypot(P[a].x - P[b].x, P[a].y - P[b].y);
+  const palm = Math.max(d(0, 9), d(5, 17) / 0.8);
+  if (palm < 8) return null;
+  return { i: d(0, 8) / palm, m: d(0, 12) / palm, r: d(0, 16) / palm, p: d(0, 20) / palm };
+}
+
 export function classify(m, prevPose) {
   const { ext } = m;
   const rp = (ext.r + ext.p) / 2;
-  const iOn = ext.i > (prevPose === 'gun' ? GESTURE.extStay : GESTURE.extOn);
-  const gun = iOn && rp < GESTURE.curl && ext.i - rp > GESTURE.gunMargin;
+  const stay = prevPose === 'gun';
+  const iOn = ext.i > (stay ? GESTURE.extStay : GESTURE.extOn);
+  const gun3 = iOn && rp < GESTURE.curl && ext.i - rp > GESTURE.gunMargin;
+  const R = m.reach;
+  const reachOut = !!R && R.i > GESTURE.reachMin && R.i - Math.max(R.m, R.r, R.p) > GESTURE.reachMargin;
+  // a gun already in hand stays drawn while the image shows the index still pointing out
+  const gun2 = stay && reachOut && rp < GESTURE.curl && ext.i > 0.5;
   const min4 = Math.min(ext.i, ext.m, ext.r, ext.p);
   const max4 = Math.max(ext.i, ext.m, ext.r, ext.p);
   if (min4 > GESTURE.palmMin) return 'palm';
-  if (gun) return 'gun';
-  if (max4 < GESTURE.fistMax) return 'fist';
+  // rock sign: index and little finger out, middle and ring curled
+  if (ext.i > GESTURE.extOn && ext.p > GESTURE.rockPinky && ext.m < GESTURE.rockCurl && ext.r < GESTURE.rockCurl) return 'rock';
+  if (gun3 || gun2) return 'gun';
+  if (max4 < GESTURE.fistMax && !reachOut) return 'fist';
   return 'none';
 }
 
 // Frames a raw class must persist before the debounced pose switches to it.
-const ENTER_FRAMES = { gun: 2, palm: 3, fist: 4, none: 5 };
-const LEAVE_GUN_FRAMES = { palm: 3, fist: 6, none: 7 };
+const ENTER_FRAMES = { gun: 2, palm: 3, fist: 4, rock: 4, none: 5 };
+const LEAVE_GUN_FRAMES = { palm: 3, fist: 6, rock: 4, none: 7 };
 
 export class HandTrack {
   constructor(id) {
@@ -111,19 +263,14 @@ export class HandTrack {
     this.handed = '';
     this.obs = null;
     this.metrics = null;
-    // trigger: thumb levels learned per player while playing
-    this.cockRef = GESTURE.thumbCockedInit; // where this thumb sits when cocked
-    this.downRef = GESTURE.thumbDownInit; // how far it gets when it fires
+    // trigger: thumb levels learned per player while playing (mirrored from this.trig for the HUD)
+    this.trig = new ThumbTrigger();
+    this.cockRef = this.trig.top;
+    this.downRef = this.trig.down;
     this.armed = false;
     this.trigger = false;
     this.pull = 0;
     this.thrDown = 0.35;
-    this.thrUp = 0.45;
-    this.fU = new OneEuro(4.0, 1.0);
-    this.uHist = [];
-    this.minSince = 0;
-    this.troughU = 0;
-    this.wantPrev = false;
     this.fireAimT = null;
     this.aimVel = { x: 0, y: 0 };
     this.qVel = { x: 0, y: 0, z: 0 };
@@ -134,6 +281,8 @@ export class HandTrack {
     this.palmNext = GESTURE.palmHold;
     this.fistT = 0;
     this.fistFired = false;
+    this.rockT = 0;
+    this.rockFired = false;
     this.pointingUp = false;
     // smoothing
     this.fP = Array.from({ length: 21 }, () => new OneEuro2(1.6, 0.012, 1.0));
@@ -173,8 +322,8 @@ export class HandTrack {
       // a hand coming back into view keeps the thumb levels learned earlier in the session
       const lv = mgr.levels[obs.handed];
       if (lv) {
-        this.cockRef = lv.cockRef;
-        this.downRef = lv.downRef;
+        this.trig.top = lv.top;
+        this.trig.down = lv.down;
       }
     }
     this.lastSeen = t;
@@ -183,9 +332,11 @@ export class HandTrack {
     this.obs = obs;
     this.handed = obs.handed;
     const m = measure(obs.W);
+    m.reach = reach2D(obs.P);
     const sig = thumbSignal(m, obs.P);
     m.h2 = sig.h2;
-    m.u = this.fU.filter(sig.u, t);
+    // unfiltered: at low camera rates any smoothing turns a quick snap into a shallow, late one
+    m.u = sig.u;
     const u = m.u;
     this.metrics = m;
 
@@ -206,45 +357,27 @@ export class HandTrack {
         this.poseSince = t;
       }
     }
-    // ---- thumb hammer trigger: thresholds sit between this player's cocked and fired thumb levels
-    const range = Math.max(0.22, this.cockRef - this.downRef);
-    const thrDown = this.downRef + range * (GESTURE.cockFactor ?? 0.5);
-    const thrUp = thrDown + Math.max(0.07, range * 0.22);
-    this.thrDown = thrDown;
-    this.thrUp = thrUp;
-    // recent peak: a snap is judged from where the thumb just was, not from its usual cocked height
-    const win = Math.max(0.35, 2.5 * mgr.frameGap);
-    this.uHist.push({ t, u });
-    while (this.uHist.length > 1 && t - this.uHist[0].t > win) this.uHist.shift();
-    let peak = -Infinity;
-    for (const s of this.uHist) peak = Math.max(peak, s.u);
-    let dropT = t;
-    for (const s of this.uHist) if (s.u >= peak - range * 0.15) dropT = s.t;
-
+    // ---- thumb hammer trigger (see ThumbTrigger)
+    const trg = this.trig;
     if (prevPose !== this.pose) {
       if (this.pose === 'gun') {
         mgr.emit('draw', this, t);
-        this.armed = u > thrUp;
-        this.minSince = u;
-        this.wantPrev = false;
+        trg.begin(u, t);
       }
       if (prevPose === 'gun') {
-        if (this.trigger) mgr.emit('release', this, t);
-        this.trigger = false;
+        if (trg.cancel(u, t)) mgr.emit('release', this, t);
         mgr.emit('holster', this, t);
       }
     }
 
-    // Learn the cocked level from a raised thumb: quickly upward, slowly downward, never mid-shot.
-    if (!this.trigger && u > thrDown + 0.04 && this.pose === 'gun') {
-      const tau = peak > this.cockRef ? 0.4 : 2.5;
-      this.cockRef = clamp(this.cockRef + (peak - this.cockRef) * (1 - Math.exp(-dt / tau)), this.downRef + 0.25, 1.1);
-    }
-    this.pull = clamp((this.cockRef - u) / Math.max(0.05, this.cockRef - thrDown), 0, 1);
-
     // The thumb trigger and the reload only count while the index finger still reads as extended;
-    // while the hand is turning into a fist or palm, the thumb position means nothing.
-    const gunNow = this.pose === 'gun' && (raw === 'gun' || raw === 'none');
+    // while the hand is turning into a fist or palm, the thumb position means nothing (a thumb
+    // wrapping over curling fingers must not fire a shot on the way to the fire-mode fist).
+    // The same goes for a frame where the index extension suddenly drops: the hand is closing. In
+    // recorded snaps the index stays put (or straightens a little) while the thumb comes down.
+    const closing = this.extIPrev != null && this.extIPrev - m.ext.i > 0.15;
+    this.extIPrev = m.ext.i;
+    const gunNow = this.pose === 'gun' && !closing && (raw === 'gun' || (raw === 'none' && m.ext.i > 0.62));
     this.rawPoseNow = raw;
 
     // ---- pointing at the ceiling = reload
@@ -261,45 +394,29 @@ export class HandTrack {
     }
 
     if (gunNow && !this.pointingUp) {
-      if (!this.trigger) {
-        this.minSince = Math.min(this.minSince, u);
-        if (!this.armed && (u > thrUp || (u - this.minSince > range * 0.4 && u > thrDown + 0.03))) this.armed = true;
-      }
-      // Fires when the thumb crosses the line, or on a quick drop from wherever it just was. A drop that
-      // shows on a single frame only must be deep, so one bad landmark does not fire the gun.
-      const snap = peak - u >= range * (GESTURE.snapFactor ?? 0.45) && peak > thrDown + 0.08;
-      const want = u < thrDown || snap;
-      if (this.armed && !this.trigger && want) {
-        if (this.wantPrev || u < thrDown - 0.06 || peak - u >= range * 0.8) {
-          this.trigger = true;
-          this.armed = false;
-          this.troughU = u;
-          this.fireAimT = Math.max(t - 0.2, Math.min(t - AIM.preTrigger, dropT));
-          mgr.emit('fire', this, t);
-        }
-      } else if (this.trigger) {
-        this.troughU = Math.min(this.troughU, u);
-        if (u > thrUp || (u - this.troughU > range * 0.45 && u > thrDown + 0.03)) {
-          // thumb lifted: remember how deep this player's shots go, then re-cock
-          this.downRef = clamp(this.downRef + (this.troughU - this.downRef) * 0.35, -0.4, this.cockRef - 0.25);
-          mgr.levels[this.handed] = { cockRef: this.cockRef, downRef: this.downRef };
-          this.trigger = false;
-          this.armed = true;
-          this.minSince = u;
-          mgr.emit('release', this, t);
-        }
-      }
-      this.wantPrev = want && !this.trigger;
-    } else {
-      this.wantPrev = false;
-      if (this.trigger) {
-        // forced release (hand changed shape): require the thumb to be lifted before the next shot
-        this.trigger = false;
-        this.armed = false;
-        this.minSince = u;
+      const ev = trg.update(u, t, mgr.frameGap);
+      if (ev === 'refire') mgr.emit('release', this, t);
+      if (ev === 'fire' || ev === 'refire') {
+        this.fireAimT = Math.max(t - 0.2, Math.min(t - AIM.preTrigger, trg.fireT));
+        mgr.emit('fire', this, t);
+      } else if (ev === 'release') {
+        // remember this player's thumb for the next time the hand comes into view
+        mgr.levels[this.handed] = { top: trg.top, down: trg.down };
         mgr.emit('release', this, t);
       }
+    } else if (this.pose === 'gun') {
+      // forced release (hand changed shape): the thumb has to come up again before the next shot
+      if (trg.fired) {
+        trg.cancel(u, t);
+        mgr.emit('release', this, t);
+      } else trg.pause();
     }
+    this.trigger = trg.fired;
+    this.armed = trg.armed;
+    this.pull = this.pose === 'gun' ? trg.pull : 0;
+    this.thrDown = trg.line;
+    this.cockRef = trg.top;
+    this.downRef = trg.down;
 
     // ---- open palm = switch weapon (repeats while held)
     if (this.pose === 'palm') {
@@ -311,6 +428,18 @@ export class HandTrack {
     } else {
       this.palmT = 0;
       this.palmNext = GESTURE.palmHold;
+    }
+
+    // ---- rock sign = change outfit (once per hold)
+    if (this.pose === 'rock') {
+      this.rockT += dt;
+      if (this.rockT >= GESTURE.rockHold && !this.rockFired) {
+        this.rockFired = true;
+        mgr.emit('outfit', this, t);
+      }
+    } else {
+      this.rockT = 0;
+      this.rockFired = false;
     }
 
     // ---- fist = fire mode

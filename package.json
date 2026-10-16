@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "build:dev": "node build.mjs --dev",
-    "test": "cd test && node gesture_unit.mjs && node trigger_unit.mjs",
+    "test": "cd test && node gesture_unit.mjs && node trigger_unit.mjs && node trigger_replay.mjs && node tracker_trial.mjs",
     "serve": "node test/server.mjs . 8080"
   },
   "dependencies": {

@@ -100,6 +100,13 @@ const snaps = (n, depth, down = 0.25, upT = 0.45) => {
   return out;
 };
 
+// snaps from a resting thumb height (0 = fully cocked) down to depth and back
+const snapsFrom = (n, rest, depth, down = 0.25, upT = 0.45) => {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push([0.08, ramp(rest, depth)], [down, hold(depth)], [0.12, ramp(depth, rest)], [upT, hold(rest)]);
+  return out;
+};
+
 let fails = 0;
 const check = (...a) => { if (!run(...a)) fails++; };
 for (const fps of [30, 15]) {
@@ -115,6 +122,18 @@ for (const fps of [30, 15]) {
   check('one-frame tracking glitches (50%)', fps, glitches, { expect: (n) => n === 0 });
 }
 check('full snaps, slow machine', 6, snaps(5, 1, 0.4, 0.6), { expect: (n) => n === 5 });
+// Seen live: after a few shots the player rests the thumb lower and snaps from there. The old fixed
+// cocked level never re-armed, so the trigger stayed down for seconds.
+for (const fps of [30, 10]) {
+  check('thumb rests lower after a few shots', fps, [draw, ...snapsFrom(3, 0, 1), [1.5, ramp(0, 0.45)], ...snapsFrom(5, 0.45, 1)], {
+    expect: (n) => n === 8,
+  });
+  check('lazy snaps from a low rest (to 75%)', fps, [draw, [1, ramp(0, 0.35)], ...snapsFrom(6, 0.35, 0.75, 0.05, 0.4)], {
+    expect: (n) => n >= 5,
+  });
+}
+check('quick snaps seen on one frame each, 8 fps', 8, [draw, ...snapsFrom(6, 0, 1, 0.02, 0.5)], { expect: (n) => n >= 5 });
+check('thumb wobbling 25% while aiming, 10 fps', 10, [draw, ...snapsFrom(6, 0, 0.25, 0.05, 0.5)], { noise: 0.003, expect: (n) => n === 0 });
 GESTURE.cockFactor = 0.36;
 GESTURE.snapFactor = 0.6;
 check('firm setting, full snaps', 30, snaps(5, 1), { expect: (n) => n === 5 });

@@ -11,10 +11,11 @@ Webcam AR shooting range: MediaPipe hand tracking puts a gun in the player's han
 
 ## Layout
 
-- `src/`: all game code. `main.js` (loop, modes, HUD), `tracker.js` (webcam, tracking worker), `hands.js` (gestures, thumb trigger), `weapons.js`, `models.js`, `range.js`, `audio.js`, `hud.js`, `fx.js`, `config.js` (all tunables), `index.html` (page template).
+- `src/`: all game code. `main.js` (loop, modes, HUD), `tracker.js` (webcam, tracking worker, GPU/CPU trial), `hands.js` (gestures, `ThumbTrigger`), `outfit.js` (clothes segmentation worker and outfit pass), `weapons.js`, `models.js`, `range.js`, `audio.js`, `hud.js`, `fx.js`, `config.js` (all tunables), `index.html` (page template).
+- `test/data/`: thumb signal traces recorded in live sessions. Trigger changes must keep `test/trigger_replay.mjs` passing.
 - `build.mjs` writes three builds: `public/` (offline, vendored engine and model), `dist/index.html` (single file) and `deploy/` (hosted, git-ignored). `public/index.html` and `dist/index.html` are committed, so run `npm run build` after changing `src/` and commit the outputs with it.
 
 ## Checks before pushing
 
-- `npm test` runs the fast unit tests (pose classification, thumb trigger simulation).
+- `npm test` runs the fast unit tests (pose classification, thumb trigger simulation and live replay, tracking delegate trial).
 - Browser tests: `npm run serve` in the background, then `bash test/regress.sh` (headless Chromium with a fake webcam built from real hand photos). It is slow on small cloud machines; the scenario runner starts its clock only once tracking is running.

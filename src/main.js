@@ -1,6 +1,6 @@
 // Phantom Range: webcam AR shooting range. Hand tracking puts a gun in your hand; gestures run it.
 import * as THREE from 'three';
-import { WEAPONS, WEAPON_BY_ID, AIM, GESTURE, DRILL_SECONDS } from './config.js';
+import { WEAPONS, WEAPON_BY_ID, AIM, GESTURE, DRILL_SECONDS, ASSETS } from './config.js';
 import { Tracker, ViewModel } from './tracker.js';
 import { HandManager } from './hands.js';
 import { AudioEngine } from './audio.js';
@@ -12,6 +12,7 @@ import { HudCanvas, drawPoseIcon } from './hud.js';
 import { POSES } from './poses.js';
 import { startShowcase } from './showcase.js';
 import { clamp, rand, storage } from './util.js';
+import { OUTFITS, OutfitSegmenter, OutfitLayer } from './outfit.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -28,6 +29,7 @@ const DEFAULTS = {
   autoReload: true,
   occlusion: true,
   skeleton: false,
+  outfit: 'off',
   volume: 0.85,
   muted: false,
   camera: '',
@@ -60,7 +62,8 @@ audio.volume = settings.volume;
 audio.muted = settings.muted || params.has('mute');
 const hud = new HudCanvas($('#hud'));
 
-let renderer, camera, gunCam, scopeCam, rangeScene, gunScene, scopeScene, scopeBg, videoTex;
+let renderer, camera, gunCam, scopeCam, rangeScene, gunScene, scopeScene, scopeBg, videoTex, outfitLayer;
+const segmenter = new OutfitSegmenter($('#cam'));
 let M, T, TEX, shellGeos, lights;
 let rangeSparks, rangeDust, rangeDebris, gunSmoke, gunSparks, gunDebris;
 let range;
@@ -158,6 +161,7 @@ function initGraphics() {
   scopeScene = new THREE.Scene();
   scopeBg = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: videoTex, toneMapped: false, depthWrite: false }));
   scopeScene.add(scopeBg);
+  outfitLayer = new OutfitLayer(videoTex);
 }
 
 function slotState(slot) {
@@ -181,6 +185,7 @@ function resize() {
   gunCam.aspect = W / H;
   gunCam.updateProjectionMatrix();
   hud.resize(W, H, DPR);
+  outfitLayer.layout(view);
   // scope background plane: mirrored, cover-cropped camera image across the whole frustum at 40 m
   const D = 40;
   scopeBg.scale.set((W * D) / view.f, (H * D) / view.f, 1);
@@ -442,6 +447,9 @@ function handleEvents(events) {
       case 'draw':
         if (isLive()) audio.play('draw', { pan: panOfX(e.track.center.x), gain: 0.45, wet: 0.1 });
         break;
+      case 'outfit':
+        if (isLive() || S.phase === 'results') nextOutfit();
+        break;
     }
   }
 }
@@ -693,6 +701,7 @@ function render(dt) {
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, W, H);
   renderer.clear();
+  outfitLayer.render(renderer);
   renderer.render(rangeScene, camera);
   if (S.scopeK < 0.85) {
     renderer.clearDepth();
@@ -862,6 +871,7 @@ function updateHud() {
   if (tr) {
     if (tr.pose === 'palm') active = 'switch';
     else if (tr.pose === 'fist') active = 'mode';
+    else if (tr.pose === 'rock') active = 'outfit';
     else if (tr.pose === 'gun') {
       if (tr.pointingUp) active = 'reload';
       else if (tr.trigger) active = 'fire';
@@ -905,6 +915,8 @@ function hudState() {
       rings.push({ x: tr.center.x, y: tr.center.y, p, label: `SWITCH → ${WEAPONS[(S.weaponIdx + 1) % WEAPONS.length].short}` });
     } else if (tr.pose === 'palm' && S.phase === 'results') {
       rings.push({ x: tr.center.x, y: tr.center.y, p: tr.palmT / GESTURE.palmHold, label: 'RUN IT AGAIN' });
+    } else if (tr.pose === 'rock' && (isLive() || S.phase === 'results') && !tr.rockFired) {
+      rings.push({ x: tr.center.x, y: tr.center.y, p: tr.rockT / GESTURE.rockHold, label: `OUTFIT → ${OUTFITS[(outfitIndex() + 1) % OUTFITS.length].name.toUpperCase()}` });
     } else if (tr.pose === 'fist' && isLive() && def.modes.length > 1 && !tr.fistFired) {
       const st = slotState(slots[0]);
       rings.push({ x: tr.center.x, y: tr.center.y, p: tr.fistT / GESTURE.fistHold, label: `MODE → ${def.modes[(st.modeIdx + 1) % def.modes.length]}` });
@@ -933,15 +945,63 @@ function hudState() {
   return { guns, rings, scope, calib, skeletons, laser: settings.laser };
 }
 
+// ---------------------------------------------------------------- outfits
+const outfitIndex = () => Math.max(0, OUTFITS.findIndex((o) => o.id === settings.outfit));
+const nextOutfit = () => wearOutfit(OUTFITS[(outfitIndex() + 1) % OUTFITS.length].id);
+
+function wearOutfit(id, { quiet = false } = {}) {
+  const o = OUTFITS.find((x) => x.id === id) || OUTFITS[0];
+  settings.outfit = o.id;
+  saveSettings();
+  if ($('#s-outfit')) $('#s-outfit').value = o.id;
+  $('#btn-outfit')?.classList.toggle('on', o.id !== 'off');
+  outfitLayer.setOutfit(o);
+  log('outfit', { id: o.id });
+  if (o.id !== 'off' && !S.mouseOnly) startSegmenter();
+  if (quiet) return;
+  if (S.mouseOnly && o.id !== 'off') toast('Outfits need the camera', 1800);
+  else if (segmenter.state === 'error') toast(segmenter.error || 'Outfits are not available here', 2600);
+  else if (o.id !== 'off' && segmenter.state === 'loading') toast(`${o.name} · loading the outfit model`, 1800);
+  else toast(o.name, 1300);
+  audio.play('ui', { gain: 0.45, wet: 0 });
+}
+
+function startSegmenter() {
+  if (segmenter.state !== 'off') return;
+  const a = tracker.assets;
+  if (!a) return; // tracking not started yet; boot starts it once the engine is known
+  segmenter.onState = (st) => {
+    log('outfit-model', { state: st, error: segmenter.error });
+    if (st === 'ready' && settings.outfit !== 'off') toast(OUTFITS[outfitIndex()].name, 1300);
+    if (st === 'error' && settings.outfit !== 'off') toast(segmenter.error || 'Outfits are not available here', 2600);
+  };
+  const model = params.get('segmodel') ? new URL(params.get('segmodel'), location.href).href : a.segModel;
+  segmenter.start({ lib: a.lib, wasmBase: a.wasmBase, model });
+}
+
+function updateOutfit() {
+  if (!outfitLayer) return;
+  if (settings.outfit !== 'off' && S.phase !== 'intro' && S.phase !== 'loading' && !S.mouseOnly) {
+    segmenter.pump(S.t);
+    const m = segmenter.take();
+    if (m) outfitLayer.setMask(m, S.t);
+  }
+  outfitLayer.update(S.t, segmenter.ms);
+}
+
 // ---------------------------------------------------------------- main loop
 let lastMs = 0;
 // Resolution steps down if the machine cannot hold a steady frame rate, so motion stays fluid.
-const perf = { dprCap: 1.75, ema: 1 / 60, slowT: 0 };
+// GPU hand tracking also shares the GPU with rendering, so it steps down when detections stay slow too.
+const perf = { dprCap: 1.75, ema: 1 / 60, slowT: 0, trackSlowT: 0 };
 function watchFrameRate(realDt) {
   if (realDt <= 0 || realDt > 0.25 || !isLive()) return;
   perf.ema += (realDt - perf.ema) * 0.05;
   perf.slowT = perf.ema > 1 / 42 ? perf.slowT + realDt : 0;
-  if (perf.slowT > 2.5 && perf.dprCap > 1 && (devicePixelRatio || 1) > 1) {
+  const gpuStarved = tracker.mode === 'worker' && tracker.delegate === 'GPU' && tracker.trial.state === 'done' && tracker.fps > 0 && tracker.fps < 18;
+  perf.trackSlowT = gpuStarved && hands.tracks.length ? perf.trackSlowT + realDt : 0;
+  if ((perf.slowT > 2.5 || perf.trackSlowT > 4) && perf.dprCap > 1 && (devicePixelRatio || 1) > 1) {
+    perf.trackSlowT = 0;
     perf.dprCap = Math.max(1, Math.min(perf.dprCap, devicePixelRatio || 1) - 0.25);
     perf.slowT = 0;
     perf.ema = 1 / 60;
@@ -956,6 +1016,7 @@ function frame(ms) {
   const dt = Math.min(0.1, Math.max(0, realDt)) * TIME_SCALE;
   lastMs = ms;
   watchFrameRate(realDt);
+  if (tracker.ready && !S.mouseOnly) tracker.tune(realDt, isLive());
   if (!dt) return;
   S.t = ms / 1000;
   if (S.phase !== 'intro' && S.phase !== 'loading' && tracker.ready && !S.mouseOnly) {
@@ -965,6 +1026,7 @@ function frame(ms) {
   }
   assignSlots();
   handleEvents(hands.drain());
+  updateOutfit();
   updateScope(dt);
   updateSlots(dt);
   if (!S.paused && S.phase !== 'results' && S.phase !== 'intro') {
@@ -1072,6 +1134,7 @@ async function boot(mode, { mouseOnly = false } = {}) {
         });
       setLoadStep('engine', 'done', 1);
       setLoadStep('model', 'done', 1);
+      if (settings.outfit !== 'off') startSegmenter();
     } else {
       for (const s of ['camera', 'engine', 'model']) setLoadStep(s, 'skip', 1);
     }
@@ -1120,6 +1183,7 @@ function syncSettingsUI() {
   $('#s-occ').checked = settings.occlusion;
   $('#s-skel').checked = settings.skeleton;
   for (const r of $$('input[name="s-trig"]')) r.checked = r.value === settings.trigger;
+  $('#s-outfit').value = settings.outfit;
   $('#o-gain').textContent = (+settings.gain).toFixed(2) + '×';
   $('#o-point').textContent = Math.round(settings.point * 100) + '%';
   $('#o-vol').textContent = Math.round(settings.volume * 100) + '%';
@@ -1148,6 +1212,9 @@ function bindUI() {
   };
   $('#btn-sound').classList.toggle('off', settings.muted);
   $('#btn-full').onclick = toggleFullscreen;
+  $('#btn-outfit').onclick = () => nextOutfit();
+  $('#s-outfit').innerHTML = OUTFITS.map((o) => `<option value="${o.id}">${o.name}</option>`).join('');
+  $('#s-outfit').onchange = (e) => wearOutfit(e.target.value);
   $('#legend-toggle').onclick = () => {
     settings.legend = !settings.legend;
     el.legend.classList.toggle('collapsed', !settings.legend);
@@ -1256,6 +1323,7 @@ function bindUI() {
       selectWeapon(S.weaponIdx + 1);
     } else if (k >= '1' && k <= '4') selectWeapon(+k - 1);
     else if (k === 'b') toggleFireMode();
+    else if (k === 'o') nextOutfit();
     else if (k === 'e') S.key.scope = !S.key.scope;
     else if (k === 'c') $('#s-calib').onclick();
     else if (k === 'h') $('#legend-toggle').onclick();
@@ -1307,8 +1375,9 @@ try {
 if (renderer) {
   bindUI();
   resize();
+  wearOutfit(settings.outfit, { quiet: true });
   requestAnimationFrame(frame);
-  window.__PR = { S, slots, hands, tracker, range, view, settings, audio, selectWeapon, startMode, startTutorial, boot, WEAPONS, slotState, toggleFireMode, reloadSlot };
+  window.__PR = { S, slots, hands, tracker, range, view, settings, audio, selectWeapon, startMode, startTutorial, boot, WEAPONS, slotState, toggleFireMode, reloadSlot, segmenter, outfitLayer, wearOutfit };
   if (!params.get('autostart')) showcase = startShowcase($('#hero-gun'), $('#hero-cap'));
   const auto = params.get('autostart');
   if (auto) {
